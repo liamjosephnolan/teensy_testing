@@ -88,12 +88,12 @@ void loop() {
   unsigned int encoderValue;
   readEncoder(&encoderValue, ENCODER_DO_PIN, ENCODER_CS_PIN, ENCODER_CLK_PIN, 0);
 
-  // Convert the encoder value to an angle (assuming 12-bit encoder)
+  // Convert the encoder value to a floating-point angle (assuming 12-bit encoder)
   // Adjust the conversion formula based on your encoder's resolution and mechanical setup
-  int angle = (encoderValue * 360) / 4096; // Example conversion
+  float angle = (encoderValue * 360.0f) / 4096.0f; // Use floating-point division
 
   // Format the message: "right_shoulder_joint_pitch_angle: <value>"
-  snprintf(msg.data.data, msg.data.capacity, "right_shoulder_joint_pitch_angle: %d", angle);
+  snprintf(msg.data.data, msg.data.capacity, "right_shoulder_joint_pitch_angle: %.2f", angle);
   msg.data.size = strlen(msg.data.data); // Update the size of the string
 
   // Publish the message
