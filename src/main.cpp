@@ -5,7 +5,7 @@
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
 
-#include <std_msgs/msg/int32.h>
+#include <std_msgs/msg/string.h> // Use String message type
 
 #if !defined(MICRO_ROS_TRANSPORT_ARDUINO_SERIAL)
 #error This example is only available for Arduino framework with serial transport.
@@ -17,7 +17,7 @@
 #define ENCODER_DO_PIN 5  // Serial Data
 
 rcl_publisher_t publisher;
-std_msgs__msg__Int32 msg;
+std_msgs__msg__String msg; // Use String message type
 
 rclc_executor_t executor;
 rclc_support_t support;
@@ -75,11 +75,12 @@ void setup() {
   RCCHECK(rclc_publisher_init_default(
     &publisher,
     &node,
-    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Int32),
-    "encoder_angle"));
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), // Use String message type
+    "mtm_joint_state")); // Publish to the mtm_joint_state topic
 
-  // Create executor
-  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+  // Initialize the message
+  msg.data.data = (char*)malloc(100); // Allocate memory for the string message
+  msg.data.capacity = 100; // Set the maximum capacity of the string
 }
 
 void loop() {
@@ -91,8 +92,9 @@ void loop() {
   // Adjust the conversion formula based on your encoder's resolution and mechanical setup
   int angle = (encoderValue * 360) / 4096; // Example conversion
 
-  // Set the message data to the angle
-  msg.data = angle;
+  // Format the message: "right_shoulder_joint_pitch_angle: <value>"
+  snprintf(msg.data.data, msg.data.capacity, "right_shoulder_joint_pitch_angle: %d", angle);
+  msg.data.size = strlen(msg.data.data); // Update the size of the string
 
   // Publish the message
   RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
