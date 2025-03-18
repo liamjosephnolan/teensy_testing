@@ -11,10 +11,25 @@
 #error This example is only available for Arduino framework with serial transport.
 #endif
 
-// Pin definitions for the right shoulder pitch encoder
-#define ENCODER_CS_PIN 9  // Chip Select
-#define ENCODER_CLK_PIN 7 // Serial Clock
-#define ENCODER_DO_PIN 5  // Serial Data
+// Pin definitions for the encoders
+#define JOINT1_CS_PIN 0  // Joint 1 Chip Select
+#define JOINT1_CLK_PIN 1 // Joint 1 Clock
+#define JOINT1_DO_PIN 2  // Joint 1 Data
+
+#define JOINT2_CS_PIN 3  // Joint 2 Chip Select
+#define JOINT2_CLK_PIN 4 // Joint 2 Clock
+#define JOINT2_DO_PIN 5  // Joint 2 Data
+
+#define JOINT3_CS_PIN 7  // Joint 3 Chip Select
+#define JOINT3_CLK_PIN 8 // Joint 3 Clock
+#define JOINT3_DO_PIN 9  // Joint 3 Data
+
+// Pin definitons for the gimbal
+#define POT_1_PIN 15 
+#define HALL_PIN 17
+#define POT_2_PIN 19
+#define POT_3_PIN 21
+
 
 rcl_publisher_t publisher;
 std_msgs__msg__String msg; // Use String message type
@@ -34,15 +49,17 @@ void error_loop() {
   }
 }
 
-// Your encoder reading function
-void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int CLK, int i) {
+
+
+// Encoder reading function
+void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int CLK) {
   *OutData = 0;  // Reset Output Array.
   digitalWrite(CSn, LOW);
   delayMicroseconds(1);  // Waiting for Tclkfe=500ns Or 16 times NOP
   // Passing 12 times, from 0 to 11
   for (int x = 0; x < 12; x++) {
     digitalWrite(CLK, LOW);
-    delayMicroseconds(1);  // Tclk/2_min = 500ns = 8 * 62.5ns
+    delayMicroseconds(1);  // Tclk/2_min = 500ns = 8 * 62.5
     digitalWrite(CLK, HIGH);
     delayMicroseconds(1);  // Tdo valid, like Tclk/2
     *OutData = (*OutData << 1) | digitalRead(DO);
@@ -57,11 +74,21 @@ void setup() {
   delay(2000); // Initial delay for micro-ROS setup (only once)
 
   // Configure encoder pins
-  pinMode(ENCODER_CS_PIN, OUTPUT);
-  pinMode(ENCODER_CLK_PIN, OUTPUT);
-  pinMode(ENCODER_DO_PIN, INPUT);
+  pinMode(JOINT1_CS_PIN, OUTPUT);
+  pinMode(JOINT1_CLK_PIN, OUTPUT);
+  pinMode(JOINT1_DO_PIN, INPUT);
 
-  digitalWrite(ENCODER_CS_PIN, HIGH); // Disable the encoder initially
+  pinMode(JOINT2_CS_PIN, OUTPUT);
+  pinMode(JOINT2_CLK_PIN, OUTPUT);
+  pinMode(JOINT2_DO_PIN, INPUT);
+
+  pinMode(JOINT3_CS_PIN, OUTPUT);
+  pinMode(JOINT3_CLK_PIN, OUTPUT);
+  pinMode(JOINT3_DO_PIN, INPUT);
+
+  digitalWrite(JOINT1_CS_PIN, HIGH); // Disable the encoder initially
+  digitalWrite(JOINT2_CS_PIN, HIGH); // Disable the encoder initially
+  digitalWrite(JOINT3_CS_PIN, HIGH); // Disable the encoder initially
 
   allocator = rcl_get_default_allocator();
 
@@ -76,7 +103,7 @@ void setup() {
     &publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), // Use String message type
-    "mtm_joint_state")); // Publish to the mtm_joint_state topic
+    "mtm_joint_states")); // Publish to the mtm_joint_states topic
 
   // Initialize the message
   msg.data.data = (char*)malloc(100); // Allocate memory for the string message
@@ -84,16 +111,19 @@ void setup() {
 }
 
 void loop() {
-  // Read the encoder value
-  unsigned int encoderValue;
-  readEncoder(&encoderValue, ENCODER_DO_PIN, ENCODER_CS_PIN, ENCODER_CLK_PIN, 0);
+  // Read the encoder values
+  unsigned int encoderValue1, encoderValue2, encoderValue3;
+  readEncoder(&encoderValue1, JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
+  readEncoder(&encoderValue2, JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN);
+  readEncoder(&encoderValue3, JOINT3_DO_PIN, JOINT3_CS_PIN, JOINT3_CLK_PIN);
 
-  // Convert the encoder value to a floating-point angle (assuming 12-bit encoder)
-  // Adjust the conversion formula based on your encoder's resolution and mechanical setup
-  float angle = (encoderValue * 360.0f) / 4096.0f; // Use floating-point division
+  // Convert the encoder values to floating-point angles (assuming 12-bit encoder)
+  float angle1 = (encoderValue1 * 360.0f) / 4096.0f; // Joint 1 angle
+  float angle2 = (encoderValue2 * 360.0f) / 4096.0f; // Joint 2 angle
+  float angle3 = (encoderValue3 * 360.0f) / 4096.0f; // Joint 3 angle
 
-  // Format the message: "right_shoulder_joint_pitch_angle: <value>"
-  snprintf(msg.data.data, msg.data.capacity, "right_shoulder_joint_pitch_angle: %.2f", angle);
+  // Format the message: "joint1_angle: <value>, joint2_angle: <value>, joint3_angle: <value>"
+  snprintf(msg.data.data, msg.data.capacity, "joint1_angle: %.2f, joint2_angle: %.2f, joint3_angle: %.2f", angle1, angle2, angle3);
   msg.data.size = strlen(msg.data.data); // Update the size of the string
 
   // Publish the message
