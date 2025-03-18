@@ -111,6 +111,14 @@ void setup() {
 }
 
 void loop() {
+  // Read the gimbal values
+  int Pot1Value, Pot2Value, Pot3Value, HallValue;
+  Pot1Value = analogRead(POT_1_PIN); // Read analog value from POT_1_PIN
+  Pot2Value = analogRead(POT_2_PIN); // Read analog value from POT_2_PIN
+  Pot3Value = analogRead(POT_3_PIN); // Read analog value from POT_3_PIN (corrected from POT_2_PIN)
+  HallValue = analogRead(HALL_PIN);  // Read analog value from HALL_PIN
+
+  
   // Read the encoder values
   unsigned int encoderValue1, encoderValue2, encoderValue3;
   readEncoder(&encoderValue1, JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
@@ -123,7 +131,7 @@ void loop() {
   float angle3 = (encoderValue3 * 360.0f) / 4096.0f; // Joint 3 angle
 
   // Format the message: "joint1_angle: <value>, joint2_angle: <value>, joint3_angle: <value>"
-  snprintf(msg.data.data, msg.data.capacity, "joint1_angle: %.2f, joint2_angle: %.2f, joint3_angle: %.2f", angle1, angle2, angle3);
+  snprintf(msg.data.data, msg.data.capacity, "joint1_angle: %.2f, joint2_angle: %.2f, joint3_angle: %.2f, Pot1_value: %.2f, Pot2_value: %.2f, Pot3_value: %.2f, Hall_value: %.2f", angle1, angle2, angle3, Pot1Value, Pot2Value, Pot3Value, HallValue);
   msg.data.size = strlen(msg.data.data); // Update the size of the string
 
   // Publish the message
