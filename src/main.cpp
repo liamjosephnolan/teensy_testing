@@ -24,15 +24,19 @@
 #define JOINT3_CLK_PIN 8 // Joint 3 Clock
 #define JOINT3_DO_PIN 9  // Joint 3 Data
 
-// Pin definitons for the gimbal
+// Pin definitions for the gimbal
 #define POT_1_PIN 15 
 #define HALL_PIN 17
 #define POT_2_PIN 19
 #define POT_3_PIN 21
 
+// Publishers for joint states and analog values
+rcl_publisher_t joint_state_publisher;
+rcl_publisher_t analog_value_publisher;
 
-rcl_publisher_t publisher;
-std_msgs__msg__String msg; // Use String message type
+// Messages for joint states and analog values
+std_msgs__msg__String joint_state_msg;
+std_msgs__msg__String analog_value_msg;
 
 rclc_executor_t executor;
 rclc_support_t support;
@@ -48,8 +52,6 @@ void error_loop() {
     delay(100); // Keep this delay for error handling (non-critical path)
   }
 }
-
-
 
 // Encoder reading function
 void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int CLK) {
@@ -98,16 +100,28 @@ void setup() {
   // Create node
   RCCHECK(rclc_node_init_default(&node, "micro_ros_platformio_node", "", &support));
 
-  // Create publisher
+  // Create publishers
   RCCHECK(rclc_publisher_init_default(
-    &publisher,
+    &joint_state_publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), // Use String message type
     "mtm_joint_states")); // Publish to the mtm_joint_states topic
 
-  // Initialize the message
-  msg.data.data = (char*)malloc(100); // Allocate memory for the string message
-  msg.data.capacity = 100; // Set the maximum capacity of the string
+  RCCHECK(rclc_publisher_init_default(
+    &analog_value_publisher,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, String), // Use String message type
+    "mtm_analog_values")); // Publish to the mtm_analog_values topic
+
+  // Initialize the messages
+  joint_state_msg.data.data = (char*)malloc(100); // Allocate memory for the string message
+  joint_state_msg.data.capacity = 100; // Set the maximum capacity of the string
+
+  analog_value_msg.data.data = (char*)malloc(100); // Allocate memory for the string message
+  analog_value_msg.data.capacity = 100; // Set the maximum capacity of the string
+
+  // Initialize the executor
+  RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 }
 
 void loop() {
@@ -115,10 +129,16 @@ void loop() {
   int Pot1Value, Pot2Value, Pot3Value, HallValue;
   Pot1Value = analogRead(POT_1_PIN); // Read analog value from POT_1_PIN
   Pot2Value = analogRead(POT_2_PIN); // Read analog value from POT_2_PIN
-  Pot3Value = analogRead(POT_3_PIN); // Read analog value from POT_3_PIN (corrected from POT_2_PIN)
+  Pot3Value = analogRead(POT_3_PIN); // Read analog value from POT_3_PIN
   HallValue = analogRead(HALL_PIN);  // Read analog value from HALL_PIN
 
-  
+  // Format the analog values message
+  snprintf(analog_value_msg.data.data, analog_value_msg.data.capacity, "Pot1: %d, Pot2: %d, Pot3: %d, Hall: %d", Pot1Value, Pot2Value, Pot3Value, HallValue);
+  analog_value_msg.data.size = strlen(analog_value_msg.data.data); // Update the size of the string
+
+  // Publish the analog values message
+  RCSOFTCHECK(rcl_publish(&analog_value_publisher, &analog_value_msg, NULL));
+
   // Read the encoder values
   unsigned int encoderValue1, encoderValue2, encoderValue3;
   readEncoder(&encoderValue1, JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
@@ -130,13 +150,13 @@ void loop() {
   float angle2 = (encoderValue2 * 360.0f) / 4096.0f; // Joint 2 angle
   float angle3 = (encoderValue3 * 360.0f) / 4096.0f; // Joint 3 angle
 
-  // Format the message: "joint1_angle: <value>, joint2_angle: <value>, joint3_angle: <value>"
-  snprintf(msg.data.data, msg.data.capacity, "joint1_angle: %.2f, joint2_angle: %.2f, joint3_angle: %.2f, Pot1_value: %.2f, Pot2_value: %.2f, Pot3_value: %.2f, Hall_value: %.2f", angle1, angle2, angle3, Pot1Value, Pot2Value, Pot3Value, HallValue);
-  msg.data.size = strlen(msg.data.data); // Update the size of the string
+  // Format the joint states message
+  snprintf(joint_state_msg.data.data, joint_state_msg.data.capacity, "joint1_angle: %.2f, joint2_angle: %.2f, joint3_angle: %.2f", angle1, angle2, angle3);
+  joint_state_msg.data.size = strlen(joint_state_msg.data.data); // Update the size of the string
 
-  // Publish the message
-  RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
+  // Publish the joint states message
+  RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
 
   // Spin the executor to process callbacks
-  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0))); // Spin with no delay
+  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0))); // Spin with a small delay
 }
