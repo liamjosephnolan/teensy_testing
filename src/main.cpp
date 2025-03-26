@@ -20,15 +20,17 @@
 #define JOINT2_CLK_PIN 4 // Joint 2 Clock
 #define JOINT2_DO_PIN 5  // Joint 2 Data
 
-#define JOINT3_CS_PIN 7  // Joint 3 Chip Select
-#define JOINT3_CLK_PIN 8 // Joint 3 Clock
-#define JOINT3_DO_PIN 9  // Joint 3 Data
+#define JOINT3_CS_PIN 8  // Joint 3 Chip Select
+#define JOINT3_CLK_PIN 9 // Joint 3 Clock
+#define JOINT3_DO_PIN 10  // Joint 3 Data
 
 // Pin definitions for the gimbal
 #define POT_1_PIN 15 
 #define HALL_PIN 17
 #define POT_2_PIN 19
 #define POT_3_PIN 21
+
+#define FIVE_VOLT_PIN 12
 
 // Publishers for joint states and analog values
 rcl_publisher_t joint_state_publisher;
@@ -91,6 +93,8 @@ void setup() {
   digitalWrite(JOINT1_CS_PIN, HIGH); // Disable the encoder initially
   digitalWrite(JOINT2_CS_PIN, HIGH); // Disable the encoder initially
   digitalWrite(JOINT3_CS_PIN, HIGH); // Disable the encoder initially
+
+  digitalWrite(FIVE_VOLT_PIN, HIGH);
 
   allocator = rcl_get_default_allocator();
 
