@@ -22,13 +22,15 @@
 
 #define JOINT3_CS_PIN 39 // Joint 3 Chip Select
 #define JOINT3_CLK_PIN 40 // Joint 3 Clock
-#define JOINT3_DO_PIN 51  // Joint 3 Data
+#define JOINT3_DO_PIN 41  // Joint 3 Data
 
 // Pin definitions for the gimbal
 #define POT_1_PIN 15 
 #define POT_2_PIN 16
 #define POT_3_PIN 17
 #define HALL_PIN 18
+
+
 
 
 
@@ -95,6 +97,10 @@ void setup() {
   digitalWrite(JOINT3_CS_PIN, HIGH); // Disable the encoder initially
 
 
+  pinMode(22, OUTPUT);      // Set pin 22 as an output
+  digitalWrite(22, HIGH);  // Set pin 22 to HIGH (3.3V
+  pinMode(23, OUTPUT);      // Set pin 23 as an output
+  digitalWrite(23, HIGH);  // Set pin 23 to HIGH (3.3V
 
   allocator = rcl_get_default_allocator();
 
