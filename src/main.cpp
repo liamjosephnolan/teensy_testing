@@ -135,6 +135,8 @@ void setup() {
 }
 
 void loop() {
+  
+  Serial.println("AHHHHHHHH");
   // Read the gimbal values
   int Pot1Value, Pot2Value, Pot3Value, HallValue;
   Pot1Value = analogRead(POT_1_PIN); // Read analog value from POT_1_PIN
