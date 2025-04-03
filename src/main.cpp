@@ -25,14 +25,14 @@
 #define JOINT3_CLK_PIN 40
 #define JOINT3_DO_PIN 41
 
-#define POT_1_PIN 15  // right_gimbal_1
-#define POT_2_PIN 16  // right_gimbal_2
-#define POT_3_PIN 19  // right_gimbal_3 (Note pin 17 is broken)
+#define POT_1_PIN 16  // right_gimbal_1
+#define POT_2_PIN 15  // right_gimbal_2
+#define POT_3_PIN 19  // right_gimbal_3
 #define HALL_PIN 18   // right_gimbal_0
 
-// Analog voltage supply pins (Must be set to high to supply gimbal with power
-#define SUPPLY_PIN_1 22 //3.3V voltage supply pin
-#define SUPPLY_PIN_2 23 //3.3V voltage supply pin
+// Analog voltage supply pins
+#define SUPPLY_PIN_1 22 // 3.3V voltage supply
+#define SUPPLY_PIN_2 23 // 3.3V voltage supply
 
 // ROS 2 Components
 rcl_publisher_t joint_state_publisher;
@@ -52,22 +52,23 @@ struct JointCalibration {
   float max_raw;    // Maximum raw sensor reading
   float min_angle;  // Minimum angle in radians
   float max_angle;  // Maximum angle in radians
+  float offset_deg; // Joint zero position offset in degrees
   float exp_a, exp_b, exp_c, exp_d; // For hall effect
 };
 
 JointCalibration calib[7] = {
   // Encoder Joints (12-bit absolute encoders)
-  {0, 4095, 0, 2*M_PI},  // right_joint_1 (0-360°)
-  {0, 4095, 0, 2*M_PI},  // right_joint_2
-  {0, 4095, 0, 2*M_PI},  // right_joint_3
+  {0, 4095, 0, 2*M_PI, 148.5},  // right_joint_1
+  {0, 4095, 0, 2*M_PI, 305.0},   // right_joint_2
+  {0, 4095, 0, 2*M_PI, 26.5},    // right_joint_3
   
-  // Potentiometer Joints (reverse order)
-  {94, 860, -125.0*M_PI/180.0, 125.0*M_PI/180.0},  // right_gimbal_3 (Pot3)
-  {72, 930, -40.0*M_PI/180.0, 40.0*M_PI/180.0},    // right_gimbal_2 (Pot2)
-  {20, 910, -40.0*M_PI/180.0, 40.0*M_PI/180.0},    // right_gimbal_1 (Pot1)
+  // Potentiometer Joints
+  {94, 860, -125.0*M_PI/180.0, 125.0*M_PI/180.0, 0},  // right_gimbal_3
+  {72, 930, -40.0*M_PI/180.0, 40.0*M_PI/180.0, 0},    // right_gimbal_2
+  {20, 910, -40.0*M_PI/180.0, 40.0*M_PI/180.0, 0},    // right_gimbal_1
   
-  // Hall Effect (right_gimbal_0)
-  {555, 973, 0, 20.0*M_PI/180.0, 31.46, 0.000225, -4.767e5, -0.0189}
+  // Hall Effect (right_gimbal_0) - now 0-5°
+  {555, 973, 0, 5.0*M_PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189}
 };
 // =====================================================================
 
@@ -112,27 +113,26 @@ void setup() {
   pinMode(JOINT3_CS_PIN, OUTPUT);
   pinMode(JOINT3_CLK_PIN, OUTPUT);
   pinMode(JOINT3_DO_PIN, INPUT);
-  pinMode(SUPPLY_PIN_1, OUTPUT);      // Set pin 22 as an output
-  pinMode(SUPPLY_PIN_2, OUTPUT);      // Set pin 22 as an output
+  pinMode(SUPPLY_PIN_1, OUTPUT);
+  pinMode(SUPPLY_PIN_2, OUTPUT);
   digitalWrite(JOINT1_CS_PIN, HIGH);
   digitalWrite(JOINT2_CS_PIN, HIGH);
   digitalWrite(JOINT3_CS_PIN, HIGH);
-  digitalWrite(SUPPLY_PIN_1,HIGH);
-  digitalWrite(SUPPLY_PIN_2,HIGH);
+  digitalWrite(SUPPLY_PIN_1, HIGH);
+  digitalWrite(SUPPLY_PIN_2, HIGH);
 
   // Initialize ROS 2
   allocator = rcl_get_default_allocator();
   RCCHECK(rclc_support_init(&support, 0, NULL, &allocator));
   RCCHECK(rclc_node_init_default(&node, "mtm_arm_node", "", &support));
 
-  // Initialize joint state publisher
+  // Initialize publishers
   RCCHECK(rclc_publisher_init_default(
     &joint_state_publisher,
     &node,
     ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
     "mtm_joint_states"));
 
-  // Initialize raw values publisher
   RCCHECK(rclc_publisher_init_default(
     &raw_values_publisher,
     &node,
@@ -171,16 +171,17 @@ void setup() {
 
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 }
+
 void loop() {
   // Read all sensor values
   unsigned int encoderValues[3];
   readEncoder(&encoderValues[0], JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
-  readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN); 
+  readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN);
   readEncoder(&encoderValues[2], JOINT3_DO_PIN, JOINT3_CS_PIN, JOINT3_CLK_PIN);
   
   int potValues[3] = {
     analogRead(POT_1_PIN),  // right_gimbal_1
-    analogRead(POT_2_PIN),  // right_gimbal_2  
+    analogRead(POT_2_PIN),  // right_gimbal_2
     analogRead(POT_3_PIN)   // right_gimbal_3
   };
   int hallValue = analogRead(HALL_PIN);  // right_gimbal_0
@@ -189,46 +190,59 @@ void loop() {
   raw_values_msg.data.data[0] = encoderValues[0];
   raw_values_msg.data.data[1] = encoderValues[1];
   raw_values_msg.data.data[2] = encoderValues[2];
-  raw_values_msg.data.data[3] = potValues[2];  // gimbal_3 (POT3)
-  raw_values_msg.data.data[4] = potValues[1];  // gimbal_2 (POT2)
-  raw_values_msg.data.data[5] = potValues[0];  // gimbal_1 (POT1)
-  raw_values_msg.data.data[6] = hallValue;
+  raw_values_msg.data.data[3] = potValues[2];  // gimbal_3
+  raw_values_msg.data.data[4] = potValues[1];  // gimbal_2
+  raw_values_msg.data.data[5] = potValues[0];  // gimbal_1
+  raw_values_msg.data.data[6] = hallValue;     // gimbal_0
   RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
 
   // Convert to angles (radians first)
   float positions_rad[7];
   
-  // Encoder joints (0-2)
+  // Encoder joints with offsets
   for(int i=0; i<3; i++) {
-    positions_rad[i] = (encoderValues[i] - calib[i].min_raw) / 
-                      (calib[i].max_raw - calib[i].min_raw) *
+    float normalized = (encoderValues[i] - calib[i].min_raw) / 
+                     (calib[i].max_raw - calib[i].min_raw);
+    // Apply offset
+    float offset_normalized = normalized - (calib[i].offset_deg / 360.0f);
+    // Wrap around if needed
+    offset_normalized = offset_normalized - floor(offset_normalized);
+
+     // Special case: Invert J1 (right_joint_1)
+     if (i == 0) {  // J1 is index 0
+      offset_normalized = 1.0f - offset_normalized;  // Invert the direction
+    }
+    
+    positions_rad[i] = offset_normalized * 
                       (calib[i].max_angle - calib[i].min_angle) + 
                       calib[i].min_angle;
   }
   
-  // Gimbal joints (3-5)
-  // right_gimbal_3 (POT3)
+  // Potentiometer joints
   positions_rad[3] = ((potValues[2] - calib[3].min_raw) / 
                     (calib[3].max_raw - calib[3].min_raw)) *
                     (calib[3].max_angle - calib[3].min_angle) + 
                     calib[3].min_angle;
-  
-  // right_gimbal_2 (POT2)
+
   positions_rad[4] = ((potValues[1] - calib[4].min_raw) / 
                     (calib[4].max_raw - calib[4].min_raw)) *
                     (calib[4].max_angle - calib[4].min_angle) + 
                     calib[4].min_angle;
-  
-  // right_gimbal_1 (POT1)
+
   positions_rad[5] = ((potValues[0] - calib[5].min_raw) / 
                     (calib[5].max_raw - calib[5].min_raw)) *
                     (calib[5].max_angle - calib[5].min_angle) + 
                     calib[5].min_angle;
   
-  // Hall effect (6)
+  // Hall effect (now 0-5° range)
   positions_rad[6] = map_exponential(hallValue, calib[6]) * 
                     (calib[6].max_angle - calib[6].min_angle) + 
                     calib[6].min_angle;
+  // Add 180° flip (π radians) and wrap around if needed
+  positions_rad[6] += (M_PI/.75);
+  if (positions_rad[6] > 2*M_PI) {
+      positions_rad[6] -= 2*M_PI;
+  }
 
   // Convert to degrees for publishing
   for(int i=0; i<7; i++) {
