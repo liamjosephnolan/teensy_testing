@@ -27,7 +27,7 @@
 
 #define POT_1_PIN 15  // right_gimbal_1
 #define POT_2_PIN 16  // right_gimbal_2
-#define POT_3_PIN 19  // right_gimbal_3
+#define POT_3_PIN 19  // right_gimbal_3 (Note pin 17 is broken)
 #define HALL_PIN 18   // right_gimbal_0
 
 // Analog voltage supply pins (Must be set to high to supply gimbal with power
@@ -171,35 +171,34 @@ void setup() {
 
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 }
-
 void loop() {
   // Read all sensor values
   unsigned int encoderValues[3];
   readEncoder(&encoderValues[0], JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
-  readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN);
+  readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN); 
   readEncoder(&encoderValues[2], JOINT3_DO_PIN, JOINT3_CS_PIN, JOINT3_CLK_PIN);
   
   int potValues[3] = {
     analogRead(POT_1_PIN),  // right_gimbal_1
-    analogRead(POT_2_PIN),  // right_gimbal_2
+    analogRead(POT_2_PIN),  // right_gimbal_2  
     analogRead(POT_3_PIN)   // right_gimbal_3
   };
   int hallValue = analogRead(HALL_PIN);  // right_gimbal_0
 
-  // Publish raw values (order matches joint_state names)
+  // Publish raw values
   raw_values_msg.data.data[0] = encoderValues[0];
   raw_values_msg.data.data[1] = encoderValues[1];
   raw_values_msg.data.data[2] = encoderValues[2];
-  raw_values_msg.data.data[3] = potValues[2];  // gimbal_3
-  raw_values_msg.data.data[4] = potValues[1];  // gimbal_2
-  raw_values_msg.data.data[5] = potValues[0];  // gimbal_1
-  raw_values_msg.data.data[6] = hallValue;     // gimbal_0
+  raw_values_msg.data.data[3] = potValues[2];  // gimbal_3 (POT3)
+  raw_values_msg.data.data[4] = potValues[1];  // gimbal_2 (POT2)
+  raw_values_msg.data.data[5] = potValues[0];  // gimbal_1 (POT1)
+  raw_values_msg.data.data[6] = hallValue;
   RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
 
   // Convert to angles (radians first)
   float positions_rad[7];
   
-  // Encoder joints
+  // Encoder joints (0-2)
   for(int i=0; i<3; i++) {
     positions_rad[i] = (encoderValues[i] - calib[i].min_raw) / 
                       (calib[i].max_raw - calib[i].min_raw) *
@@ -207,15 +206,26 @@ void loop() {
                       calib[i].min_angle;
   }
   
-  // Potentiometer joints (reverse order)
-  for(int i=0; i<3; i++) {
-    positions_rad[6-i] = (potValues[i] - calib[3+i].min_raw) / 
-                        (calib[3+i].max_raw - calib[3+i].min_raw) *
-                        (calib[3+i].max_angle - calib[3+i].min_angle) + 
-                        calib[3+i].min_angle;
-  }
+  // Gimbal joints (3-5)
+  // right_gimbal_3 (POT3)
+  positions_rad[3] = ((potValues[2] - calib[3].min_raw) / 
+                    (calib[3].max_raw - calib[3].min_raw)) *
+                    (calib[3].max_angle - calib[3].min_angle) + 
+                    calib[3].min_angle;
   
-  // Hall effect
+  // right_gimbal_2 (POT2)
+  positions_rad[4] = ((potValues[1] - calib[4].min_raw) / 
+                    (calib[4].max_raw - calib[4].min_raw)) *
+                    (calib[4].max_angle - calib[4].min_angle) + 
+                    calib[4].min_angle;
+  
+  // right_gimbal_1 (POT1)
+  positions_rad[5] = ((potValues[0] - calib[5].min_raw) / 
+                    (calib[5].max_raw - calib[5].min_raw)) *
+                    (calib[5].max_angle - calib[5].min_angle) + 
+                    calib[5].min_angle;
+  
+  // Hall effect (6)
   positions_rad[6] = map_exponential(hallValue, calib[6]) * 
                     (calib[6].max_angle - calib[6].min_angle) + 
                     calib[6].min_angle;
@@ -225,13 +235,10 @@ void loop() {
     joint_state_msg.position.data[i] = positions_rad[i] * 180.0 / M_PI;
   }
 
-  // Update timestamp
+  // Update timestamp and publish
   joint_state_msg.header.stamp.sec = millis() / 1000;
   joint_state_msg.header.stamp.nanosec = (millis() % 1000) * 1000000;
-
-  // Publish joint states
   RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
   
-  // Process callbacks
   RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)));
 }
