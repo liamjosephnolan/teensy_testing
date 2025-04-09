@@ -99,7 +99,7 @@ float map_exponential(float x, const JointCalibration &c) {
 }
 
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(921600);
   set_microros_serial_transports(Serial);
   delay(2000);
 
@@ -249,10 +249,14 @@ void loop() {
     joint_state_msg.position.data[i] = positions_rad[i] * 180.0 / M_PI;
   }
 
-  // Update timestamp and publish
-  joint_state_msg.header.stamp.sec = millis() / 1000;
-  joint_state_msg.header.stamp.nanosec = (millis() % 1000) * 1000000;
+  // Timestamp with microsecond resolution
+  unsigned long now = micros();
+  joint_state_msg.header.stamp.sec = now / 1000000;
+  joint_state_msg.header.stamp.nanosec = (now % 1000000) * 1000;
+
+  RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
   RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
-  
-  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(10)));
+
+  // Remove unnecessary wait
+  RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0)));
 }
