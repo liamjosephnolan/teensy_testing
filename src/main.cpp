@@ -172,6 +172,14 @@ void setup() {
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 }
 
+// Filtered values for encoders, potentiometers, and hall effect sensor
+float filtered_encoder_values[3] = {0, 0, 0};
+float filtered_pot_values[3] = {0, 0, 0};
+float filtered_hall_value = 0;
+
+// Smoothing factor for the low-pass filter
+const float alpha = 0.1; // Adjust this value for desired smoothing
+
 void loop() {
   // Read all sensor values
   unsigned int encoderValues[3];
@@ -186,7 +194,7 @@ void loop() {
   };
   int hallValue = analogRead(HALL_PIN);  // right_gimbal_0
 
-  // Publish raw values
+  // Publish raw values (unfiltered)
   raw_values_msg.data.data[0] = encoderValues[0];
   raw_values_msg.data.data[1] = encoderValues[1];
   raw_values_msg.data.data[2] = encoderValues[2];
@@ -196,20 +204,29 @@ void loop() {
   raw_values_msg.data.data[6] = hallValue;     // gimbal_0
   RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
 
-  // Convert to angles (radians first)
+  // Apply low-pass filter for joint state data
+  for (int i = 0; i < 3; i++) {
+    filtered_encoder_values[i] = alpha * encoderValues[i] + (1 - alpha) * filtered_encoder_values[i];
+  }
+  for (int i = 0; i < 3; i++) {
+    filtered_pot_values[i] = alpha * potValues[i] + (1 - alpha) * filtered_pot_values[i];
+  }
+  filtered_hall_value = alpha * hallValue + (1 - alpha) * filtered_hall_value;
+
+  // Convert to angles (radians first) using filtered data
   float positions_rad[7];
   
   // Encoder joints with offsets
-  for(int i=0; i<3; i++) {
-    float normalized = (encoderValues[i] - calib[i].min_raw) / 
+  for (int i = 0; i < 3; i++) {
+    float normalized = (filtered_encoder_values[i] - calib[i].min_raw) / 
                      (calib[i].max_raw - calib[i].min_raw);
     // Apply offset
     float offset_normalized = normalized - (calib[i].offset_deg / 360.0f);
     // Wrap around if needed
     offset_normalized = offset_normalized - floor(offset_normalized);
 
-     // Special case: Invert J1 (right_joint_1)
-     if (i == 0) {  // J1 is index 0
+    // Special case: Invert J1 (right_joint_1)
+    if (i == 0) {  // J1 is index 0
       offset_normalized = 1.0f - offset_normalized;  // Invert the direction
     }
     
@@ -219,23 +236,23 @@ void loop() {
   }
   
   // Potentiometer joints
-  positions_rad[3] = ((potValues[2] - calib[3].min_raw) / 
+  positions_rad[3] = ((filtered_pot_values[2] - calib[3].min_raw) / 
                     (calib[3].max_raw - calib[3].min_raw)) *
                     (calib[3].max_angle - calib[3].min_angle) + 
                     calib[3].min_angle;
 
-  positions_rad[4] = ((potValues[1] - calib[4].min_raw) / 
+  positions_rad[4] = ((filtered_pot_values[1] - calib[4].min_raw) / 
                     (calib[4].max_raw - calib[4].min_raw)) *
                     (calib[4].max_angle - calib[4].min_angle) + 
                     calib[4].min_angle;
 
-  positions_rad[5] = ((potValues[0] - calib[5].min_raw) / 
+  positions_rad[5] = ((filtered_pot_values[0] - calib[5].min_raw) / 
                     (calib[5].max_raw - calib[5].min_raw)) *
                     (calib[5].max_angle - calib[5].min_angle) + 
                     calib[5].min_angle;
   
   // Hall effect (now 0-5° range)
-  positions_rad[6] = map_exponential(hallValue, calib[6]) * 
+  positions_rad[6] = map_exponential(filtered_hall_value, calib[6]) * 
                     (calib[6].max_angle - calib[6].min_angle) + 
                     calib[6].min_angle;
   // Add 180° flip (π radians) and wrap around if needed
@@ -245,7 +262,7 @@ void loop() {
   }
 
   // Convert to degrees for publishing
-  for(int i=0; i<7; i++) {
+  for (int i = 0; i < 7; i++) {
     joint_state_msg.position.data[i] = positions_rad[i] * 180.0 / M_PI;
   }
 
@@ -254,7 +271,6 @@ void loop() {
   joint_state_msg.header.stamp.sec = now / 1000000;
   joint_state_msg.header.stamp.nanosec = (now % 1000000) * 1000;
 
-  RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
   RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
 
   // Remove unnecessary wait
