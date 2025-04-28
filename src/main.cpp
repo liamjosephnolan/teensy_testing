@@ -180,6 +180,8 @@ float filtered_hall_value = 0;
 // Smoothing factor for the low-pass filter
 const float alpha = 0.1; // Adjust this value for desired smoothing
 
+bool use_filter = true; // Set to false to disable the filter by default
+
 void loop() {
   // Read all sensor values
   unsigned int encoderValues[3];
@@ -205,13 +207,24 @@ void loop() {
   RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
 
   // Apply low-pass filter for joint state data
-  for (int i = 0; i < 3; i++) {
-    filtered_encoder_values[i] = alpha * encoderValues[i] + (1 - alpha) * filtered_encoder_values[i];
+  if (use_filter) {
+    for (int i = 0; i < 3; i++) {
+        filtered_encoder_values[i] = alpha * encoderValues[i] + (1 - alpha) * filtered_encoder_values[i];
+    }
+    for (int i = 0; i < 3; i++) {
+        filtered_pot_values[i] = alpha * potValues[i] + (1 - alpha) * filtered_pot_values[i];
+    }
+    filtered_hall_value = alpha * hallValue + (1 - alpha) * filtered_hall_value;
+  } else {
+    // If the filter is disabled, use raw values directly
+    for (int i = 0; i < 3; i++) {
+        filtered_encoder_values[i] = encoderValues[i];
+    }
+    for (int i = 0; i < 3; i++) {
+        filtered_pot_values[i] = potValues[i];
+    }
+    filtered_hall_value = hallValue;
   }
-  for (int i = 0; i < 3; i++) {
-    filtered_pot_values[i] = alpha * potValues[i] + (1 - alpha) * filtered_pot_values[i];
-  }
-  filtered_hall_value = alpha * hallValue + (1 - alpha) * filtered_hall_value;
 
   // Convert to angles (radians first) using filtered data
   float positions_rad[7];
