@@ -264,14 +264,14 @@ void loop() {
                     (calib[5].max_angle - calib[5].min_angle) + 
                     calib[5].min_angle;
   
-  // Hall effect (now 0-5° range)
-  positions_rad[6] = map_exponential(filtered_hall_value, calib[6]) * 
-                    (calib[6].max_angle - calib[6].min_angle) + 
-                    calib[6].min_angle;
-  // Add 180° flip (π radians) and wrap around if needed
-  positions_rad[6] += (M_PI/.75);
-  if (positions_rad[6] > 2*M_PI) {
-      positions_rad[6] -= 2*M_PI;
+  // Hall effect mapping (0 to 30 degrees)
+  if (filtered_hall_value >= 973) {
+      positions_rad[6] = 30.0 * M_PI / 180.0; // Max angle in radians
+  } else if (filtered_hall_value <= 590) {
+      positions_rad[6] = 0; // Min angle in radians
+  } else {
+      // Linear interpolation between 590 and 973
+      positions_rad[6] = ((filtered_hall_value - 590) / (973 - 590)) * (30.0 * M_PI / 180.0);
   }
 
   // Convert to degrees for publishing
