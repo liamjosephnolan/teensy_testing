@@ -1,6 +1,5 @@
 #include <Arduino.h>
 #include <micro_ros_platformio.h>
-
 #include <rcl/rcl.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
@@ -12,7 +11,9 @@
 #error This example is only available for Arduino framework with serial transport.
 #endif
 
-// Hardware Pin Definitions
+// =====================================================================
+// HARDWARE PIN DEFINITIONS
+// =====================================================================
 #define JOINT1_CS_PIN 33
 #define JOINT1_CLK_PIN 34 
 #define JOINT1_DO_PIN 35
@@ -32,20 +33,25 @@
 
 // Analog voltage supply pins
 #define SUPPLY_PIN_1 22 // 3.3V voltage supply
-#define SUPPLY_PIN_2 23 // 3.3V voltage supply
+#define SUPPLY_PIN_2 23 // 3.4V voltage supply
 
-// ROS 2 Components
+// =====================================================================
+// ROS 2 COMPONENTS
+// =====================================================================
 rcl_publisher_t joint_state_publisher;
 rcl_publisher_t raw_values_publisher;
+rcl_publisher_t target_pose_publisher; // NEW: Publisher for target_pose
 sensor_msgs__msg__JointState joint_state_msg;
 std_msgs__msg__Float32MultiArray raw_values_msg;
+sensor_msgs__msg__JointState target_pose_msg; // NEW: Message for target_pose
+
 rclc_executor_t executor;
 rclc_support_t support;
 rcl_allocator_t allocator;
 rcl_node_t node;
 
 // =====================================================================
-// JOINT CALIBRATION DATA
+// JOINT CALIBRATION DATA (for mtm_joint_states)
 // =====================================================================
 struct JointCalibration {
   float min_raw;    // Minimum raw sensor reading
@@ -58,21 +64,100 @@ struct JointCalibration {
 
 JointCalibration calib[7] = {
   // Encoder Joints (12-bit absolute encoders)
-  {0, 4095, 0, 2*M_PI, 148.5},  // right_joint_1
-  {0, 4095, 0, 2*M_PI, 305.0},   // right_joint_2
-  {0, 4095, 0, 2*M_PI, 26.5},    // right_joint_3
+  {0, 4095, 0, 2*PI, 148.5},  // right_joint_1
+  {0, 4095, 0, 2*PI, 305.0},   // right_joint_2
+  {0, 4095, 0, 2*PI, 26.5},    // right_joint_3
   
   // Potentiometer Joints
-  {94, 860, -125.0*M_PI/180.0, 125.0*M_PI/180.0, 0},  // right_gimbal_3
-  {72, 930, -40.0*M_PI/180.0, 40.0*M_PI/180.0, 0},    // right_gimbal_2
-  {20, 910, -40.0*M_PI/180.0, 40.0*M_PI/180.0, 0},    // right_gimbal_1
+  {94, 860, -125.0*PI/180.0, 125.0*PI/180.0, 0},  // right_gimbal_3
+  {72, 930, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_2
+  {20, 910, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_1
   
   // Hall Effect (right_gimbal_0) - now 0-5°
-  {555, 973, 0, 5.0*M_PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189}
+  {555, 973, 0, 5.0*PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189}
 };
-// =====================================================================
 
-// Error handling macros
+// =====================================================================
+// KINEMATICS DATA & FUNCTIONS (from old code)
+// These are used specifically for calculating the /target_pose
+// =====================================================================
+struct EncoderPinsKinematics {
+  int cs;
+  int clk;
+  int dout;
+};
+
+// Define pins for each encoder used in kinematics calculation
+EncoderPinsKinematics encoders_kin[3] = {
+  {JOINT1_CS_PIN, JOINT1_CLK_PIN, JOINT1_DO_PIN},  // Encoder 1 (right_joint_1)
+  {JOINT2_CS_PIN, JOINT2_CLK_PIN, JOINT2_DO_PIN},  // Encoder 2 (right_joint_2)
+  {JOINT3_CS_PIN, JOINT3_CLK_PIN, JOINT3_DO_PIN}   // Encoder 3 (right_joint_3)
+};
+
+// UPDATED: Encoder offsets in ticks, from the new code snippet
+float encoder_offsets_kin[3] = {1712, 1135, 1931};
+
+#define TICKS_PER_REV 4096
+
+// Function to read 12-bit absolute encoder for kinematics
+uint16_t readEncoderForKinematics(const EncoderPinsKinematics& ep) {
+  uint16_t value = 0;
+
+  digitalWrite(ep.cs, LOW);
+  delayMicroseconds(1);
+
+  for (int i = 0; i < 12; i++) {
+    digitalWrite(ep.clk, HIGH);
+    delayMicroseconds(1);
+
+    value <<= 1;
+    if (digitalRead(ep.dout)) {
+      value |= 1;
+    }
+
+    digitalWrite(ep.clk, LOW);
+    delayMicroseconds(1);
+  }
+
+  digitalWrite(ep.cs, HIGH);
+  return value;
+}
+
+// Convert encoder ticks to radians for kinematics
+float encoderToRadKin(int16_t ticks) { // Changed name to avoid conflict and parameter to int16_t
+  return (2.0f * PI * ticks) / (float)TICKS_PER_REV;
+}
+
+// Compute Denavit-Hartenberg (DH) transformation matrix
+void computeDHMatrix(float theta, float d, float a, float alpha, float T[4][4]) {
+  T[0][0] = cos(theta);             T[0][1] = -sin(theta) * cos(alpha);  T[0][2] = sin(theta) * sin(alpha);   T[0][3] = a * cos(theta);
+  T[1][0] = sin(theta);             T[1][1] = cos(theta) * cos(alpha);   T[1][2] = -cos(theta) * sin(alpha);  T[1][3] = a * sin(theta);
+  T[2][0] = 0;                      T[2][1] = sin(alpha);                T[2][2] = cos(alpha);                T[2][3] = d;
+  T[3][0] = 0;                      T[3][1] = 0;                         T[3][2] = 0;                         T[3][3] = 1;
+}
+
+// Multiply two 4x4 matrices
+void multiplyMatrix(float A[4][4], float B[4][4], float result[4][4]) {
+  float temp[4][4];
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      temp[i][j] = 0;
+      for (int k = 0; k < 4; k++) {
+        temp[i][j] += A[i][k] * B[k][j];
+      }
+    }
+  }
+  // Copy result from temp to result
+  for (int i = 0; i < 4; i++) {
+    for (int j = 0; j < 4; j++) {
+      result[i][j] = temp[i][j];
+    }
+  }
+}
+
+// =====================================================================
+// ERROR HANDLING
+// =====================================================================
 #define RCCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){error_loop();}}
 #define RCSOFTCHECK(fn) { rcl_ret_t temp_rc = fn; if((temp_rc != RCL_RET_OK)){}}
 
@@ -80,6 +165,12 @@ void error_loop() {
   while(1) { delay(100); }
 }
 
+// =====================================================================
+// ENCODER & SENSOR READING FUNCTIONS (for mtm_joint_states)
+// =====================================================================
+
+// Function to read 12-bit absolute encoder for mtm_joint_states and raw_values
+// Note: This is separate from readEncoderForKinematics due to different parameter types
 void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int CLK) {
   *OutData = 0;
   digitalWrite(CSn, LOW);
@@ -94,16 +185,20 @@ void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int C
   digitalWrite(CSn, HIGH);
 }
 
+// Map exponential for Hall effect sensor
 float map_exponential(float x, const JointCalibration &c) {
   return c.exp_a*exp(c.exp_b*x) + c.exp_c*exp(c.exp_d*x);
 }
 
+// =====================================================================
+// SETUP FUNCTION
+// =====================================================================
 void setup() {
   Serial.begin(921600);
   set_microros_serial_transports(Serial);
   delay(2000);
 
-  // Configure pins
+  // Configure general I/O pins for encoders
   pinMode(JOINT1_CS_PIN, OUTPUT);
   pinMode(JOINT1_CLK_PIN, OUTPUT);
   pinMode(JOINT1_DO_PIN, INPUT);
@@ -113,11 +208,24 @@ void setup() {
   pinMode(JOINT3_CS_PIN, OUTPUT);
   pinMode(JOINT3_CLK_PIN, OUTPUT);
   pinMode(JOINT3_DO_PIN, INPUT);
+
+  // Initialize encoder CS and CLK pins (consistent with old kinematics code)
+  digitalWrite(JOINT1_CS_PIN, HIGH);
+  digitalWrite(JOINT1_CLK_PIN, LOW); // Set CLK low as per old code's setupEncoderPins
+  digitalWrite(JOINT2_CS_PIN, HIGH);
+  digitalWrite(JOINT2_CLK_PIN, LOW); // Set CLK low as per old code's setupEncoderPins
+  digitalWrite(JOINT3_CS_PIN, HIGH);
+  digitalWrite(JOINT3_CLK_PIN, LOW); // Set CLK low as per old code's setupEncoderPins
+
+  // Configure potentiometer and Hall effect pins
+  pinMode(POT_1_PIN, INPUT);
+  pinMode(POT_2_PIN, INPUT);
+  pinMode(POT_3_PIN, INPUT);
+  pinMode(HALL_PIN, INPUT);
+
+  // Configure voltage supply pins
   pinMode(SUPPLY_PIN_1, OUTPUT);
   pinMode(SUPPLY_PIN_2, OUTPUT);
-  digitalWrite(JOINT1_CS_PIN, HIGH);
-  digitalWrite(JOINT2_CS_PIN, HIGH);
-  digitalWrite(JOINT3_CS_PIN, HIGH);
   digitalWrite(SUPPLY_PIN_1, HIGH);
   digitalWrite(SUPPLY_PIN_2, HIGH);
 
@@ -139,6 +247,13 @@ void setup() {
     ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32MultiArray),
     "mtm_raw_values"));
 
+  // NEW: Initialize target_pose_publisher
+  RCCHECK(rclc_publisher_init_default(
+    &target_pose_publisher,
+    &node,
+    ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, JointState),
+    "/target_pose"));
+
   // Setup joint state message
   joint_state_msg.name.size = 7;
   joint_state_msg.name.data = (rosidl_runtime_c__String*)malloc(7 * sizeof(rosidl_runtime_c__String));
@@ -158,6 +273,9 @@ void setup() {
   
   joint_state_msg.position.size = 7;
   joint_state_msg.position.data = (double*)malloc(7 * sizeof(double));
+  joint_state_msg.velocity.size = 0; // Not used for this message
+  joint_state_msg.effort.size = 0;   // Not used for this message
+
 
   // Setup raw values message
   raw_values_msg.data.size = 7;
@@ -169,8 +287,44 @@ void setup() {
   raw_values_msg.layout.dim.data[0].size = 7;
   raw_values_msg.layout.dim.data[0].stride = 7;
 
+
+  // NEW: Setup target_pose_msg
+  target_pose_msg.name.size = 3;
+  target_pose_msg.name.data = (rosidl_runtime_c__String*)malloc(3 * sizeof(rosidl_runtime_c__String));
+  
+  const char* target_pose_joint_names[] = {"x", "y", "z"};
+  for(int i=0; i<3; i++) {
+      target_pose_msg.name.data[i].data = (char*)malloc(20); 
+      strcpy(target_pose_msg.name.data[i].data, target_pose_joint_names[i]);
+      target_pose_msg.name.data[i].size = strlen(target_pose_joint_names[i]);
+      target_pose_msg.name.data[i].capacity = 20;
+  }
+  
+  target_pose_msg.position.size = 3;
+  target_pose_msg.position.data = (double*)malloc(3 * sizeof(double));
+  for(int i=0; i<3; i++) {
+      target_pose_msg.position.data[i] = 0.0; // Initialize
+  }
+
+  // Velocity and Effort are part of JointState, allocate even if not directly used in this publisher
+  target_pose_msg.velocity.size = 3;
+  target_pose_msg.velocity.data = (double*)malloc(3 * sizeof(double));
+  for(int i=0; i<3; i++) {
+      target_pose_msg.velocity.data[i] = 0.0; // Initialize
+  }
+
+  target_pose_msg.effort.size = 3;
+  target_pose_msg.effort.data = (double*)malloc(3 * sizeof(double));
+  for(int i=0; i<3; i++) {
+      target_pose_msg.effort.data[i] = 0.0; // Initialize
+  }
+
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
 }
+
+// =====================================================================
+// LOOP FUNCTION
+// =====================================================================
 
 // Filtered values for encoders, potentiometers, and hall effect sensor
 float filtered_encoder_values[3] = {0, 0, 0};
@@ -180,10 +334,8 @@ float filtered_hall_value = 0;
 // Smoothing factor for the low-pass filter
 const float alpha = 0.1; // Adjust this value for desired smoothing
 
-bool use_filter = true; // Set to false to disable the filter by default
-
 void loop() {
-  // Read all sensor values
+  // Read all sensor values for mtm_joint_states and raw_values
   unsigned int encoderValues[3];
   readEncoder(&encoderValues[0], JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
   readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN);
@@ -197,36 +349,25 @@ void loop() {
   int hallValue = analogRead(HALL_PIN);  // right_gimbal_0
 
   // Publish raw values (unfiltered)
-  raw_values_msg.data.data[0] = encoderValues[0];
-  raw_values_msg.data.data[1] = encoderValues[1];
-  raw_values_msg.data.data[2] = encoderValues[2];
-  raw_values_msg.data.data[3] = potValues[2];  // gimbal_3
-  raw_values_msg.data.data[4] = potValues[1];  // gimbal_2
-  raw_values_msg.data.data[5] = potValues[0];  // gimbal_1
-  raw_values_msg.data.data[6] = hallValue;     // gimbal_0
+  raw_values_msg.data.data[0] = (float)encoderValues[0];
+  raw_values_msg.data.data[1] = (float)encoderValues[1];
+  raw_values_msg.data.data[2] = (float)encoderValues[2];
+  raw_values_msg.data.data[3] = (float)potValues[2];  // gimbal_3
+  raw_values_msg.data.data[4] = (float)potValues[1];  // gimbal_2
+  raw_values_msg.data.data[5] = (float)potValues[0];  // gimbal_1
+  raw_values_msg.data.data[6] = (float)hallValue;     // gimbal_0
   RCSOFTCHECK(rcl_publish(&raw_values_publisher, &raw_values_msg, NULL));
 
   // Apply low-pass filter for joint state data
-  if (use_filter) {
-    for (int i = 0; i < 3; i++) {
-        filtered_encoder_values[i] = alpha * encoderValues[i] + (1 - alpha) * filtered_encoder_values[i];
-    }
-    for (int i = 0; i < 3; i++) {
-        filtered_pot_values[i] = alpha * potValues[i] + (1 - alpha) * filtered_pot_values[i];
-    }
-    filtered_hall_value = alpha * hallValue + (1 - alpha) * filtered_hall_value;
-  } else {
-    // If the filter is disabled, use raw values directly
-    for (int i = 0; i < 3; i++) {
-        filtered_encoder_values[i] = encoderValues[i];
-    }
-    for (int i = 0; i < 3; i++) {
-        filtered_pot_values[i] = potValues[i];
-    }
-    filtered_hall_value = hallValue;
+  for (int i = 0; i < 3; i++) {
+    filtered_encoder_values[i] = alpha * encoderValues[i] + (1 - alpha) * filtered_encoder_values[i];
   }
+  for (int i = 0; i < 3; i++) {
+    filtered_pot_values[i] = alpha * potValues[i] + (1 - alpha) * filtered_pot_values[i];
+  }
+  filtered_hall_value = alpha * hallValue + (1 - alpha) * filtered_hall_value;
 
-  // Convert to angles (radians first) using filtered data
+  // Convert to angles (radians first) using filtered data for mtm_joint_states
   float positions_rad[7];
   
   // Encoder joints with offsets
@@ -243,8 +384,7 @@ void loop() {
       offset_normalized = 1.0f - offset_normalized;  // Invert the direction
     }
     
-    positions_rad[i] = offset_normalized * 
-                      (calib[i].max_angle - calib[i].min_angle) + 
+    positions_rad[i] = offset_normalized * (calib[i].max_angle - calib[i].min_angle) + 
                       calib[i].min_angle;
   }
   
@@ -264,28 +404,78 @@ void loop() {
                     (calib[5].max_angle - calib[5].min_angle) + 
                     calib[5].min_angle;
   
-  // Hall effect mapping (0 to 30 degrees)
-  if (filtered_hall_value >= 973) {
-      positions_rad[6] = 30.0 * M_PI / 180.0; // Max angle in radians
-  } else if (filtered_hall_value <= 590) {
-      positions_rad[6] = 0; // Min angle in radians
-  } else {
-      // Linear interpolation between 590 and 973
-      positions_rad[6] = ((filtered_hall_value - 590) / (973 - 590)) * (30.0 * M_PI / 180.0);
+  // Hall effect (now 0-5° range)
+  positions_rad[6] = map_exponential(filtered_hall_value, calib[6]) * (calib[6].max_angle - calib[6].min_angle) + 
+                    calib[6].min_angle;
+  // Add 180° flip (PI radians) and wrap around if needed
+  positions_rad[6] += (PI/.75f); // Use f suffix for float literal
+  if (positions_rad[6] > 2*PI) {
+      positions_rad[6] -= 2*PI;
   }
 
-  // Convert to degrees for publishing
+  // Convert to degrees for publishing mtm_joint_states (as per your current code)
   for (int i = 0; i < 7; i++) {
-    joint_state_msg.position.data[i] = positions_rad[i] * 180.0 / M_PI;
+    joint_state_msg.position.data[i] = positions_rad[i] * 180.0 / PI;
   }
 
-  // Timestamp with microsecond resolution
+  // Timestamp with microsecond resolution for mtm_joint_states
   unsigned long now = micros();
   joint_state_msg.header.stamp.sec = now / 1000000;
   joint_state_msg.header.stamp.nanosec = (now % 1000000) * 1000;
 
   RCSOFTCHECK(rcl_publish(&joint_state_publisher, &joint_state_msg, NULL));
 
-  // Remove unnecessary wait
+  // --- KINEMATICS CALCULATION FOR /target_pose ---
+  // Read encoder ticks for J1, J2, J3 using the kinematics-specific reader
+  // Cast to int16_t for use with encoderToRadKin as per the new code's function signature
+  int16_t enc1_ticks_kin = (int16_t)readEncoderForKinematics(encoders_kin[0]);
+  int16_t enc2_ticks_kin = (int16_t)readEncoderForKinematics(encoders_kin[1]);
+  int16_t enc3_ticks_kin = (int16_t)readEncoderForKinematics(encoders_kin[2]);
+
+  // Convert to radians and apply UPDATED offsets from kinematics code
+  float q1_kin = -encoderToRadKin(enc1_ticks_kin - encoder_offsets_kin[0]);
+  float q2_kin = -encoderToRadKin(enc2_ticks_kin - encoder_offsets_kin[1]);
+  float q3_kin = encoderToRadKin(enc3_ticks_kin - encoder_offsets_kin[2]);
+
+  // Apply q3 offset as per kinematics code
+  q3_kin -= PI / 2.0f; // Use f suffix for float literal
+
+  // DH parameters - use 'f' suffix for float literals to avoid double promotion
+  float d_dh[3]     = {  0.0f,    0.0f,  -40.0f };
+  float a_dh[3]     = { 45.0f,  217.5f, 217.5f };
+  float alpha_dh[3] = { PI/2.0f,  -PI/2.0f, -PI/2.0f };
+  // Note: theta[2] in the old code became q3_kin - PI/2.0f. 
+  // q3_kin already had PI/2.0f subtracted, so this effectively subtracts PI from initial q3.
+  float theta_dh[3] = { q1_kin, q2_kin, q3_kin - PI/2.0f };
+
+  // Compute transformation matrices
+  float T01_dh[4][4], T12_dh[4][4], T23_dh[4][4];
+  float T02_dh[4][4], T03_dh[4][4];
+
+  computeDHMatrix(theta_dh[0], d_dh[0], a_dh[0], alpha_dh[0], T01_dh);
+  computeDHMatrix(theta_dh[1], d_dh[1], a_dh[1], alpha_dh[1], T12_dh);
+  computeDHMatrix(theta_dh[2], d_dh[2], a_dh[2], alpha_dh[2], T23_dh);
+
+  multiplyMatrix(T01_dh, T12_dh, T02_dh);
+  multiplyMatrix(T02_dh, T23_dh, T03_dh);
+
+  // Extract XYZ and apply global offsets from kinematics code
+  // Convert from millimeters (used in DH params) to meters (standard ROS 2 units)
+  float x_pos = (T03_dh[0][3] - 262.5f) / 1000.0f;
+  float y_pos = (T03_dh[2][3] + 40.0f) / 1000.0f;
+  float z_pos = (T03_dh[1][3] + 217.5f) / 1000.0f;
+
+  // Populate target_pose_msg
+  target_pose_msg.position.data[0] = (double)x_pos;
+  target_pose_msg.position.data[1] = (double)y_pos;
+  target_pose_msg.position.data[2] = (double)z_pos;
+
+  // Set timestamp for target_pose_msg
+  unsigned long now_target_pose = micros();
+  target_pose_msg.header.stamp.sec = now_target_pose / 1000000;
+  target_pose_msg.header.stamp.nanosec = (now_target_pose % 1000000) * 1000;
+
+  RCSOFTCHECK(rcl_publish(&target_pose_publisher, &target_pose_msg, NULL));
+
   RCSOFTCHECK(rclc_executor_spin_some(&executor, RCL_MS_TO_NS(0)));
 }
