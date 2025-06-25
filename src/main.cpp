@@ -64,19 +64,21 @@ struct JointCalibration {
 
 JointCalibration calib[7] = {
   // Encoder Joints (12-bit absolute encoders)
-  {0, 4095, 0, 2*PI, 148.5},  // right_joint_1
-  {0, 4095, 0, 2*PI, 305.0},   // right_joint_2
-  {0, 4095, 0, 2*PI, 26.5},    // right_joint_3
+  // New J1 offset_deg calculated: (1.0 - (1680.0/4095.0)) * 360.0 = 212.3078
+  {0, 4095, 0, 2*PI, 148.31},  // right_joint_1
+  // New J2 offset_deg calculated: (1145.0/4095.0) * 360.0 = 100.6593
+  {0, 4095, 0, 2*PI, 100.66},   // right_joint_2
+  // New J3 offset_deg calculated: (1920.0/4095.0) * 360.0 = 168.7910
+  {0, 4095, 0, 2*PI, 168.79},    // right_joint_3
   
-  // Potentiometer Joints
-  {94, 860, -125.0*PI/180.0, 125.0*PI/180.0, 0},  // right_gimbal_3
-  {72, 930, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_2
-  {20, 910, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_1
+  // Potentiometer Joints (updated min/max raw values)
+  {100, 860, -125.0*PI/180.0, 125.0*PI/180.0, 0},  // right_gimbal_3 (min_raw: 100, max_raw: 860)
+  {3, 915, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_2 (min_raw: 3, max_raw: 915)
+  {71, 971, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_1 (min_raw: 71, max_raw: 971)
   
-  // Hall Effect (right_gimbal_0) - now 0-5°
-  {555, 973, 0, 5.0*PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189}
+  // Hall Effect (right_gimbal_0) - now 0-5° (updated min/max raw values)
+  {530, 971, 0, 5.0*PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189} // min_raw: 530, max_raw: 971
 };
-
 // =====================================================================
 // KINEMATICS DATA & FUNCTIONS (from old code)
 // These are used specifically for calculating the /target_pose
