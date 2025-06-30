@@ -322,6 +322,7 @@ void setup() {
   }
 
   RCCHECK(rclc_executor_init(&executor, &support.context, 1, &allocator));
+
 }
 
 // =====================================================================
@@ -411,7 +412,7 @@ void loop() {
                     calib[6].min_angle;
   // Add 180° flip (PI radians) and wrap around if needed
   positions_rad[6] += (PI/.75f); // Use f suffix for float literal
-  if (positions_rad[6] > 2*PI) {2
+  if (positions_rad[6] > 2*PI) {
       positions_rad[6] -= 2*PI;
   }
 
