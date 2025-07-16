@@ -15,7 +15,7 @@
 // HARDWARE PIN DEFINITIONS
 // =====================================================================
 #define JOINT1_CS_PIN 33
-#define JOINT1_CLK_PIN 34 
+#define JOINT1_CLK_PIN 34
 #define JOINT1_DO_PIN 35
 
 #define JOINT2_CS_PIN 36
@@ -53,15 +53,16 @@ rcl_node_t node;
 // =====================================================================
 // JOINT CALIBRATION DATA (for mtm_joint_states)
 // =====================================================================
+// CORRECTED: Simplified struct
 struct JointCalibration {
   float min_raw;    // Minimum raw sensor reading
   float max_raw;    // Maximum raw sensor reading
   float min_angle;  // Minimum angle in radians
   float max_angle;  // Maximum angle in radians
   float offset_deg; // Joint zero position offset in degrees
-  float exp_a, exp_b, exp_c, exp_d; // For hall effect
 };
 
+// CORRECTED: Updated calib array
 JointCalibration calib[7] = {
   // Encoder Joints (12-bit absolute encoders)
   // New J1 offset_deg calculated: (1.0 - (1680.0/4095.0)) * 360.0 = 212.3078
@@ -70,14 +71,15 @@ JointCalibration calib[7] = {
   {0, 4095, 0, 2*PI, 100.66},   // right_joint_2
   // New J3 offset_deg calculated: (1920.0/4095.0) * 360.0 = 168.7910
   {0, 4095, 0, 2*PI, 168.79},    // right_joint_3
-  
+
   // Potentiometer Joints (updated min/max raw values)
   {100, 860, -125.0*PI/180.0, 125.0*PI/180.0, 0},  // right_gimbal_3 (min_raw: 100, max_raw: 860)
   {3, 915, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_2 (min_raw: 3, max_raw: 915)
   {71, 971, -40.0*PI/180.0, 40.0*PI/180.0, 0},    // right_gimbal_1 (min_raw: 71, max_raw: 971)
-  
-  // Hall Effect (right_gimbal_0) - now 0-5° (updated min/max raw values)
-  {530, 971, 0, 5.0*PI/180.0, 0, 31.46, 0.000225, -4.767e5, -0.0189} // min_raw: 530, max_raw: 971
+
+  // Hall Effect (right_gimbal_0)
+  // Effective range: 580-1000. Below 580 is clamped to 0.
+  {560, 1000, -10 * PI / 180.0, 45.0 * PI / 180.0, 0}
 };
 // =====================================================================
 // KINEMATICS DATA & FUNCTIONS (from old code)
@@ -187,10 +189,7 @@ void readEncoder(unsigned int *OutData, unsigned int DO, int CSn, unsigned int C
   digitalWrite(CSn, HIGH);
 }
 
-// Map exponential for Hall effect sensor
-float map_exponential(float x, const JointCalibration &c) {
-  return c.exp_a*exp(c.exp_b*x) + c.exp_c*exp(c.exp_d*x);
-}
+// CORRECTED: The map_exponential function has been removed.
 
 // =====================================================================
 // SETUP FUNCTION
@@ -259,20 +258,20 @@ void setup() {
   // Setup joint state message
   joint_state_msg.name.size = 7;
   joint_state_msg.name.data = (rosidl_runtime_c__String*)malloc(7 * sizeof(rosidl_runtime_c__String));
-  
+
   const char* joint_names[] = {
     "right_joint_1", "right_joint_2", "right_joint_3",
-    "right_gimbal_3", "right_gimbal_2", "right_gimbal_1", 
+    "right_gimbal_3", "right_gimbal_2", "right_gimbal_1",
     "right_gimbal_0"
   };
-  
+
   for(int i=0; i<7; i++) {
     joint_state_msg.name.data[i].data = (char*)malloc(20);
     strcpy(joint_state_msg.name.data[i].data, joint_names[i]);
     joint_state_msg.name.data[i].size = strlen(joint_names[i]);
     joint_state_msg.name.data[i].capacity = 20;
   }
-  
+
   joint_state_msg.position.size = 7;
   joint_state_msg.position.data = (double*)malloc(7 * sizeof(double));
   joint_state_msg.velocity.size = 0; // Not used for this message
@@ -293,15 +292,15 @@ void setup() {
   // NEW: Setup target_pose_msg
   target_pose_msg.name.size = 3;
   target_pose_msg.name.data = (rosidl_runtime_c__String*)malloc(3 * sizeof(rosidl_runtime_c__String));
-  
+
   const char* target_pose_joint_names[] = {"x", "y", "z"};
   for(int i=0; i<3; i++) {
-      target_pose_msg.name.data[i].data = (char*)malloc(20); 
+      target_pose_msg.name.data[i].data = (char*)malloc(20);
       strcpy(target_pose_msg.name.data[i].data, target_pose_joint_names[i]);
       target_pose_msg.name.data[i].size = strlen(target_pose_joint_names[i]);
       target_pose_msg.name.data[i].capacity = 20;
   }
-  
+
   target_pose_msg.position.size = 3;
   target_pose_msg.position.data = (double*)malloc(3 * sizeof(double));
   for(int i=0; i<3; i++) {
@@ -343,7 +342,7 @@ void loop() {
   readEncoder(&encoderValues[0], JOINT1_DO_PIN, JOINT1_CS_PIN, JOINT1_CLK_PIN);
   readEncoder(&encoderValues[1], JOINT2_DO_PIN, JOINT2_CS_PIN, JOINT2_CLK_PIN);
   readEncoder(&encoderValues[2], JOINT3_DO_PIN, JOINT3_CS_PIN, JOINT3_CLK_PIN);
-  
+
   int potValues[3] = {
     analogRead(POT_1_PIN),  // right_gimbal_1
     analogRead(POT_2_PIN),  // right_gimbal_2
@@ -372,10 +371,10 @@ void loop() {
 
   // Convert to angles (radians first) using filtered data for mtm_joint_states
   float positions_rad[7];
-  
+
   // Encoder joints with offsets
   for (int i = 0; i < 3; i++) {
-    float normalized = (filtered_encoder_values[i] - calib[i].min_raw) / 
+    float normalized = (filtered_encoder_values[i] - calib[i].min_raw) /
                      (calib[i].max_raw - calib[i].min_raw);
     // Apply offset
     float offset_normalized = normalized - (calib[i].offset_deg / 360.0f);
@@ -386,34 +385,44 @@ void loop() {
     if (i == 0) {  // J1 is index 0
       offset_normalized = 1.0f - offset_normalized;  // Invert the direction
     }
-    
-    positions_rad[i] = offset_normalized * (calib[i].max_angle - calib[i].min_angle) + 
+
+    positions_rad[i] = offset_normalized * (calib[i].max_angle - calib[i].min_angle) +
                       calib[i].min_angle;
   }
-  
+
   // Potentiometer joints
-  positions_rad[3] = ((filtered_pot_values[2] - calib[3].min_raw) / 
+  positions_rad[3] = ((filtered_pot_values[2] - calib[3].min_raw) /
                     (calib[3].max_raw - calib[3].min_raw)) *
-                    (calib[3].max_angle - calib[3].min_angle) + 
+                    (calib[3].max_angle - calib[3].min_angle) +
                     calib[3].min_angle;
 
-  positions_rad[4] = ((filtered_pot_values[1] - calib[4].min_raw) / 
+  positions_rad[4] = ((filtered_pot_values[1] - calib[4].min_raw) /
                     (calib[4].max_raw - calib[4].min_raw)) *
-                    (calib[4].max_angle - calib[4].min_angle) + 
+                    (calib[4].max_angle - calib[4].min_angle) +
                     calib[4].min_angle;
 
-  positions_rad[5] = ((filtered_pot_values[0] - calib[5].min_raw) / 
+  positions_rad[5] = ((filtered_pot_values[0] - calib[5].min_raw) /
                     (calib[5].max_raw - calib[5].min_raw)) *
-                    (calib[5].max_angle - calib[5].min_angle) + 
+                    (calib[5].max_angle - calib[5].min_angle) +
                     calib[5].min_angle;
-  
-  // Hall effect (now 0-5° range)
-  positions_rad[6] = map_exponential(filtered_hall_value, calib[6]) * (calib[6].max_angle - calib[6].min_angle) + 
-                    calib[6].min_angle;
-  // Add 180° flip (PI radians) and wrap around if needed
-  positions_rad[6] += (PI/.75f); // Use f suffix for float literal
-  if (positions_rad[6] > 2*PI) {
-      positions_rad[6] -= 2*PI;
+
+  // CORRECTED: New linear mapping logic for the Hall effect sensor
+  // Hall effect (right_gimbal_0) from 0 to 45 degrees
+  // Values under the minimum raw value (580) are set to 0 degrees.
+  if (filtered_hall_value < calib[6].min_raw) {
+    positions_rad[6] = calib[6].min_angle; // Set to 0 rad
+  } else {
+    // Linearly map the value from the effective range [580, 1000] to the angle range
+    float normalized_value = (filtered_hall_value - calib[6].min_raw) /
+                           (calib[6].max_raw - calib[6].min_raw);
+
+    // Clamp the value to 1.0 to prevent exceeding the max angle
+    if (normalized_value > 1.0f) {
+      normalized_value = 1.0f;
+    }
+
+    positions_rad[6] = normalized_value * (calib[6].max_angle - calib[6].min_angle) +
+                       calib[6].min_angle;
   }
 
   // Convert to degrees for publishing mtm_joint_states (as per your current code)
@@ -447,7 +456,7 @@ void loop() {
   float d_dh[3]     = {  0.0f,    0.0f,  -40.0f };
   float a_dh[3]     = { 45.0f,  217.5f, 217.5f };
   float alpha_dh[3] = { PI/2.0f,  -PI/2.0f, -PI/2.0f };
-  // Note: theta[2] in the old code became q3_kin - PI/2.0f. 
+  // Note: theta[2] in the old code became q3_kin - PI/2.0f.
   // q3_kin already had PI/2.0f subtracted, so this effectively subtracts PI from initial q3.
   float theta_dh[3] = { q1_kin, q2_kin, q3_kin - PI/2.0f };
 
